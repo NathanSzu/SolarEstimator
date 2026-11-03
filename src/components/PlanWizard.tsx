@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { HORIZON_YEARS, monthlyProduction, project } from '../lib/finance'
 import { searchLocations, type GeoResult } from '../lib/geocode'
@@ -7,11 +7,15 @@ import { fetchIrradiance, irradianceMatches } from '../lib/solar'
 import type { Plan } from '../types/plan'
 import { Field, NumberField, inputClass } from './fields'
 
+const PaybackCharts = lazy(() => import('./PaybackCharts'))
+
 type Patch = Partial<Omit<Plan, 'id'>>
 interface StepProps {
   plan: Plan
   update: (patch: Patch) => void
 }
+
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
 const money = (n: number) => n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
 const money2 = (n: number) => n.toLocaleString(undefined, { style: 'currency', currency: 'USD' })
@@ -103,6 +107,17 @@ function SystemStep({ plan, update }: StepProps) {
       <NumberField label="Azimuth" value={s.azimuthDeg} onChange={set('azimuthDeg')} min={0} max={359} suffix="°" hint="180° faces south (northern hemisphere)." />
       <NumberField label="System losses" value={s.lossesPct} onChange={set('lossesPct')} min={0} max={50} step={0.5} suffix="%" />
       <NumberField label="Annual degradation" value={s.degradationPct} onChange={set('degradationPct')} min={0} max={3} step={0.1} suffix="%" />
+      <Field label="Start month" hint="First month the system produces power. Affects early cash flow because sunlight varies by season.">
+        <select
+          value={plan.assumptions.startMonth}
+          onChange={(e) => update({ assumptions: { ...plan.assumptions, startMonth: Number(e.target.value) } })}
+          className={inputClass}
+        >
+          {MONTH_NAMES.map((m, i) => (
+            <option key={m} value={i + 1}>{m}</option>
+          ))}
+        </select>
+      </Field>
       <NumberField
         label="Electricity rate"
         value={plan.assumptions.electricityRate}
@@ -242,18 +257,23 @@ function ReviewStep({ plan, update }: StepProps) {
       {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
       {result && (
         <div className="grid gap-3 rounded-xl bg-amber-50 p-4 sm:grid-cols-2 lg:grid-cols-4 dark:bg-slate-900">
-          <Stat label="Payback" value={formatPayback(result.paybackMonth)} />
+          <Stat label="Payback" value={formatPayback(result.paybackMonth)} hint="The month your cumulative cash position reaches zero and stays there, counting the down payment, loan payments and ongoing costs." />
           <Stat label={`${HORIZON_YEARS}-year net profit`} value={money(result.netAtHorizon)} hint="Total savings minus all costs paid (down payment, loan principal and interest, maintenance, inverter replacement). Not adjusted for inflation or the time value of money." />
           <Stat label="Year-one production" value={`${Math.round(result.firstYearKwh).toLocaleString()} kWh`} />
           <Stat label="Up-front cost" value={money(result.upfront)} />
-          <Stat label="First-month cash flow" value={money2(result.rows[0].net)} />
+          <Stat label="First-month cash flow" value={money2(result.rows[0].net)} hint="Savings minus the loan payment and upkeep in month one only. It can be negative even when the plan eventually pays back, because savings grow over time and the loan payment ends." />
         </div>
       )}
       {result && cache && (
-        <p className="text-xs text-slate-500">
-          Based on {cache.year} historical irradiance for this location (Open-Meteo), assuming all production offsets
-          purchased electricity at your rate. Charts are coming in the next phase.
-        </p>
+        <>
+          <Suspense fallback={<p className="text-sm text-slate-500">Loading charts…</p>}>
+            <PaybackCharts result={result} startMonth={plan.assumptions.startMonth} />
+          </Suspense>
+          <p className="text-xs text-slate-500">
+            Based on {cache.year} historical irradiance for this location (Open-Meteo), assuming all production offsets
+            purchased electricity at your rate.
+          </p>
+        </>
       )}
     </div>
   )

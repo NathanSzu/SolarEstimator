@@ -10,6 +10,7 @@ export interface MonthRow {
   productionKwh: number
   savings: number
   loanPayment: number
+  loanBalance: number
   net: number
   cumulative: number
 }
@@ -38,14 +39,18 @@ export function project(plan: Plan, yearOneMonthlyKwh: number[], years = HORIZON
 
   const rows: MonthRow[] = []
   let cumulative = -upfront
-  let paybackMonth: number | null = upfront === 0 ? 0 : null
+  let balance = financed
+  const monthlyRate = loan.aprPct / 100 / 12
+  // Payback counts only once the position stays at or above zero, so early dips don't end it prematurely.
+  let lastNegativeMonth = upfront > 0 ? 0 : -1
 
   for (let m = 1; m <= years * 12; m++) {
     const year = Math.floor((m - 1) / 12)
-    const kwh = yearOneMonthlyKwh[(m - 1) % 12] * Math.pow(1 - system.degradationPct / 100, year)
+    const kwh = yearOneMonthlyKwh[(assumptions.startMonth - 1 + m - 1) % 12] * Math.pow(1 - system.degradationPct / 100, year)
     const rate = assumptions.electricityRate * Math.pow(1 + assumptions.rateEscalationPct / 100, year)
     const savings = kwh * rate
     const loanPayment = m <= loan.termMonths && financed > 0 ? payment : 0
+    if (loanPayment > 0) balance = Math.max(balance * (1 + monthlyRate) - loanPayment, 0)
     const upkeep =
       costs.annualMaintenance / 12 +
       (costs.inverterReplacementCost > 0 && m === Math.round(costs.inverterReplacementYear) * 12
@@ -53,9 +58,11 @@ export function project(plan: Plan, yearOneMonthlyKwh: number[], years = HORIZON
         : 0)
     const monthNet = savings - loanPayment - upkeep
     cumulative += monthNet
-    if (paybackMonth === null && cumulative >= 0) paybackMonth = m
-    rows.push({ month: m, productionKwh: kwh, savings, loanPayment, net: monthNet, cumulative })
+    if (cumulative < 0) lastNegativeMonth = m
+    rows.push({ month: m, productionKwh: kwh, savings, loanPayment, loanBalance: balance, net: monthNet, cumulative })
   }
+
+  const paybackMonth = lastNegativeMonth === -1 ? 0 : lastNegativeMonth === years * 12 ? null : lastNegativeMonth + 1
 
   return {
     upfront,

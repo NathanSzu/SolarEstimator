@@ -50,7 +50,7 @@ export const usePlans = create<PlansState>()(
     }),
     {
       name: 'solar-estimator-plans',
-      version: 3,
+      version: 4,
       migrate: (state) => {
         const old = (state as { plans?: unknown[] } | undefined)?.plans ?? []
         return { plans: old.map((p) => sanitizePlan(p, true)).filter((p): p is Plan => p !== null).slice(0, MAX_PLANS) }

@@ -25,7 +25,7 @@ describe('project', () => {
   const base = () => {
     const p = createDefaultPlan('t')
     p.costs = { ...p.costs, installCost: 12000, incentives: 0 }
-    p.assumptions = { rateEscalationPct: 0, electricityRate: 0.2 }
+    p.assumptions = { rateEscalationPct: 0, electricityRate: 0.2, startMonth: 1 }
     p.system.degradationPct = 0
     return p
   }
@@ -58,6 +58,35 @@ describe('project', () => {
     const r = project(p, flat(100), 2)
     expect(r.rows[11].savings).toBeCloseTo(20)
     expect(r.rows[12].savings).toBeCloseTo(100 * 0.9 * 0.2 * 1.1)
+  })
+
+  it('amortizes the loan balance to zero at the end of the term', () => {
+    const p = base()
+    p.loan = { enabled: true, principal: 10000, aprPct: 6, termMonths: 60 }
+    const r = project(p, flat(500), 6)
+    expect(r.rows[0].loanBalance).toBeLessThan(10000)
+    expect(r.rows[59].loanBalance).toBeCloseTo(0, 4)
+    expect(r.rows[60].loanBalance).toBe(0)
+  })
+
+  it('starts production in the chosen calendar month', () => {
+    const p = base()
+    p.assumptions.startMonth = 6
+    const kwh = Array.from({ length: 12 }, (_, i) => (i + 1) * 10)
+    const r = project(p, kwh, 1)
+    expect(r.rows[0].productionKwh).toBe(60)
+    expect(r.rows[6].productionKwh).toBe(120)
+    expect(r.rows[7].productionKwh).toBe(10)
+  })
+
+  it('does not count an early non-negative start as payback when cash flow dips later', () => {
+    const p = base()
+    p.costs.installCost = 600
+    p.loan = { enabled: true, principal: 600, aprPct: 0, termMonths: 12 }
+    // $30/month savings vs $50/month payment for a year, then $30/month with no payment
+    const r = project(p, flat(150), 3)
+    expect(r.upfront).toBe(0)
+    expect(r.paybackMonth).toBe(20)
   })
 
   it('subtracts maintenance and a one-time inverter replacement', () => {

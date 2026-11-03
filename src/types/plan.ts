@@ -15,7 +15,7 @@ export interface Plan {
     inverterReplacementYear: number
   }
   loan: { enabled: boolean; principal: number; aprPct: number; termMonths: number }
-  assumptions: { rateEscalationPct: number; electricityRate: number }
+  assumptions: { rateEscalationPct: number; electricityRate: number; startMonth: number }
   /** Cached historical irradiance (kWh/m² per month) for the location and orientation it was fetched for. */
   irradiance?: IrradianceCache
 }
@@ -41,7 +41,7 @@ export function createDefaultPlan(name: string): Plan {
     system: { sizeKw: 6, tiltDeg: 20, azimuthDeg: 180, lossesPct: 14, degradationPct: 0.5 },
     costs: { installCost: 18000, incentives: 0, annualMaintenance: 0, inverterReplacementCost: 0, inverterReplacementYear: 13 },
     loan: { enabled: false, principal: 0, aprPct: 6.5, termMonths: 180 },
-    assumptions: { rateEscalationPct: 3, electricityRate: 0.17 },
+    assumptions: { rateEscalationPct: 3, electricityRate: 0.17, startMonth: new Date().getMonth() + 1 },
   }
 }
 
@@ -110,6 +110,8 @@ export function sanitizePlan(raw: unknown, keepIdentity = false): Plan | null {
     assumptions: {
       rateEscalationPct: num(asm.rateEscalationPct, d.assumptions.rateEscalationPct),
       electricityRate: num(asm.electricityRate, d.assumptions.electricityRate),
+      // Plans saved before this setting existed started in January.
+      startMonth: Math.min(12, Math.max(1, Math.round(num(asm.startMonth, 1)))),
     },
     irradiance: sanitizeIrradiance(raw.irradiance),
   }
