@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { HORIZON_YEARS, monthlyProduction, project } from '../lib/finance'
 import { searchLocations, type GeoResult } from '../lib/geocode'
 import { loanSummary } from '../lib/loan'
+import { fetchIrradiance, irradianceMatches } from '../lib/solar'
 import type { Plan } from '../types/plan'
 import { Field, NumberField, inputClass } from './fields'
 
@@ -101,9 +104,20 @@ function SystemStep({ plan, update }: StepProps) {
       <NumberField label="System losses" value={s.lossesPct} onChange={set('lossesPct')} min={0} max={50} step={0.5} suffix="%" />
       <NumberField label="Annual degradation" value={s.degradationPct} onChange={set('degradationPct')} min={0} max={3} step={0.1} suffix="%" />
       <NumberField
+        label="Electricity rate"
+        value={plan.assumptions.electricityRate}
+        onChange={(v) => update({ assumptions: { ...plan.assumptions, electricityRate: v } })}
+        min={0}
+        max={2}
+        step={0.01}
+        prefix="$"
+        suffix="/kWh"
+        hint="Check your utility bill for your current rate."
+      />
+      <NumberField
         label="Energy price escalation"
         value={plan.assumptions.rateEscalationPct}
-        onChange={(v) => update({ assumptions: { rateEscalationPct: v } })}
+        onChange={(v) => update({ assumptions: { ...plan.assumptions, rateEscalationPct: v } })}
         min={-5}
         max={15}
         step={0.1}
@@ -126,6 +140,15 @@ function CostsStep({ plan, update }: StepProps) {
         <NumberField label="Incentives & rebates" value={costs.incentives} onChange={(v) => update({ costs: { ...costs, incentives: v } })} min={0} step={100} prefix="$" hint="e.g. tax credits, utility rebates." />
       </div>
       <p className="text-sm">Net cost: <strong>{money(net)}</strong></p>
+
+      <fieldset className="space-y-3">
+        <legend className="text-sm font-medium">Optional ongoing costs</legend>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <NumberField label="Annual maintenance" value={costs.annualMaintenance} onChange={(v) => update({ costs: { ...costs, annualMaintenance: v } })} min={0} step={10} prefix="$" suffix="/yr" hint="Cleaning, monitoring, insurance." />
+          <NumberField label="Inverter replacement" value={costs.inverterReplacementCost} onChange={(v) => update({ costs: { ...costs, inverterReplacementCost: v } })} min={0} step={100} prefix="$" hint="Leave at 0 to exclude." />
+          <NumberField label="Replacement year" value={costs.inverterReplacementYear} onChange={(v) => update({ costs: { ...costs, inverterReplacementYear: Math.round(v) } })} min={1} max={HORIZON_YEARS} suffix="yr" hint="Often 12–15 years." />
+        </div>
+      </fieldset>
 
       <label className="flex items-center gap-2">
         <input
@@ -156,25 +179,53 @@ function CostsStep({ plan, update }: StepProps) {
   )
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div>
-      <div className="text-xs text-slate-500">{label}</div>
+    <div title={hint}>
+      <div className="text-xs text-slate-500">
+        {label}
+        {hint && <span aria-hidden className="ml-1 cursor-help">ⓘ</span>}
+      </div>
       <div className="text-lg font-semibold">{value}</div>
     </div>
   )
 }
 
-function ReviewStep({ plan }: StepProps) {
+function ReviewStep({ plan, update }: StepProps) {
   const { location: l, system: s, costs: c, loan } = plan
   const net = Math.max(c.installCost - c.incentives, 0)
+  const hasLoc = l.lat !== null && l.lon !== null
+  const cache = plan.irradiance
+  const fresh = hasLoc && irradianceMatches(cache, l.lat!, l.lon!, s.tiltDeg, s.azimuthDeg)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!hasLoc || fresh) return
+    const ctrl = new AbortController()
+    setLoading(true)
+    setError('')
+    fetchIrradiance(l.lat!, l.lon!, s.tiltDeg, s.azimuthDeg, ctrl.signal)
+      .then((irradiance) => update({ irradiance }))
+      .catch((e: Error) => e.name !== 'AbortError' && setError(e.message))
+      .finally(() => setLoading(false))
+    return () => ctrl.abort()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasLoc, fresh, l.lat, l.lon, s.tiltDeg, s.azimuthDeg])
+
+  const result = useMemo(() => {
+    if (!fresh || !cache) return null
+    return project(plan, monthlyProduction(cache.monthlyKwhPerM2, s.sizeKw, s.lossesPct))
+  }, [fresh, cache, plan, s.sizeKw, s.lossesPct])
+
   const rows: [string, string][] = [
     ['Location', l.label || 'Not set'],
     ['System', `${s.sizeKw} kW, ${s.tiltDeg}° tilt, ${s.azimuthDeg}° azimuth`],
     ['Losses / degradation', `${s.lossesPct}% / ${s.degradationPct}% per year`],
     ['Net cost', money(net)],
+    ['Ongoing costs', c.annualMaintenance || c.inverterReplacementCost ? `${money(c.annualMaintenance)}/yr maintenance${c.inverterReplacementCost ? `, ${money(c.inverterReplacementCost)} inverter in year ${c.inverterReplacementYear}` : ''}` : 'None'],
     ['Financing', loan.enabled ? `${money(loan.principal)} at ${loan.aprPct}% for ${loan.termMonths} months (${money2(loanSummary(loan.principal, loan.aprPct, loan.termMonths).payment)}/mo)` : 'Cash purchase'],
-    ['Energy price escalation', `${plan.assumptions.rateEscalationPct}% per year`],
+    ['Energy price', `$${plan.assumptions.electricityRate}/kWh, rising ${plan.assumptions.rateEscalationPct}% per year`],
   ]
   return (
     <div className="space-y-4">
@@ -186,10 +237,34 @@ function ReviewStep({ plan }: StepProps) {
           </div>
         ))}
       </dl>
-      {l.lat === null && <p className="text-sm text-amber-700 dark:text-amber-400">Add a location to enable production and energy price estimates.</p>}
-      <p className="text-sm text-slate-500">Payback charts will appear here in an upcoming phase.</p>
+      {l.lat === null && <p className="text-sm text-amber-700 dark:text-amber-400">Add a location to calculate production and payback.</p>}
+      {loading && <p className="text-sm text-slate-500">Loading historical solar data…</p>}
+      {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+      {result && (
+        <div className="grid gap-3 rounded-xl bg-amber-50 p-4 sm:grid-cols-2 lg:grid-cols-4 dark:bg-slate-900">
+          <Stat label="Payback" value={formatPayback(result.paybackMonth)} />
+          <Stat label={`${HORIZON_YEARS}-year net profit`} value={money(result.netAtHorizon)} hint="Total savings minus all costs paid (down payment, loan principal and interest, maintenance, inverter replacement). Not adjusted for inflation or the time value of money." />
+          <Stat label="Year-one production" value={`${Math.round(result.firstYearKwh).toLocaleString()} kWh`} />
+          <Stat label="Up-front cost" value={money(result.upfront)} />
+          <Stat label="First-month cash flow" value={money2(result.rows[0].net)} />
+        </div>
+      )}
+      {result && cache && (
+        <p className="text-xs text-slate-500">
+          Based on {cache.year} historical irradiance for this location (Open-Meteo), assuming all production offsets
+          purchased electricity at your rate. Charts are coming in the next phase.
+        </p>
+      )}
     </div>
   )
+}
+
+function formatPayback(month: number | null) {
+  if (month === null) return `Not within ${HORIZON_YEARS} years`
+  if (month === 0) return 'No up-front cost'
+  const y = Math.floor(month / 12)
+  const m = month % 12
+  return [y && `${y} yr`, m && `${m} mo`].filter(Boolean).join(' ')
 }
 
 const steps = [
@@ -227,9 +302,15 @@ export default function PlanWizard({ plan, update }: StepProps) {
         <button onClick={() => setStep((s) => s - 1)} disabled={step === 0} className="rounded-lg border border-slate-300 px-4 py-2 disabled:opacity-40 dark:border-slate-700">
           Back
         </button>
-        <button onClick={() => setStep((s) => s + 1)} disabled={step === steps.length - 1} className="rounded-lg bg-sun-500 px-4 py-2 font-medium text-white hover:bg-sun-600 disabled:opacity-40">
-          Next
-        </button>
+        {step === steps.length - 1 ? (
+          <Link to="/" className="rounded-lg bg-sun-500 px-4 py-2 font-medium text-white hover:bg-sun-600">
+            Done
+          </Link>
+        ) : (
+          <button onClick={() => setStep((s) => s + 1)} className="rounded-lg bg-sun-500 px-4 py-2 font-medium text-white hover:bg-sun-600">
+            Next
+          </button>
+        )}
       </div>
       <p className="text-xs text-slate-500">Changes save automatically to this browser.</p>
     </div>

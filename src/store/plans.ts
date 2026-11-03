@@ -43,17 +43,17 @@ export const usePlans = create<PlansState>()(
       importPlans: (data) => {
         const list = Array.isArray(data) ? data : [data]
         const room = MAX_PLANS - get().plans.length
-        const valid = list.map(sanitizePlan).filter((p): p is Plan => p !== null).slice(0, Math.max(room, 0))
+        const valid = list.map((p) => sanitizePlan(p)).filter((p): p is Plan => p !== null).slice(0, Math.max(room, 0))
         if (valid.length) set((s) => ({ plans: [...s.plans, ...valid] }))
         return valid.length
       },
     }),
     {
       name: 'solar-estimator-plans',
-      version: 1,
+      version: 3,
       migrate: (state) => {
         const old = (state as { plans?: unknown[] } | undefined)?.plans ?? []
-        return { plans: old.map(sanitizePlan).filter((p): p is Plan => p !== null).slice(0, MAX_PLANS) }
+        return { plans: old.map((p) => sanitizePlan(p, true)).filter((p): p is Plan => p !== null).slice(0, MAX_PLANS) }
       },
     },
   ),
