@@ -34,7 +34,7 @@ export default function Home() {
 
   return (
     <div className="space-y-8">
-      <section className="rounded-2xl bg-gradient-to-br from-sun-400 to-sun-600 p-8 text-white shadow">
+      <section className="rounded-2xl bg-gradient-to-br from-sun-500 to-sun-600 p-8 text-white shadow">
         <h1 className="text-3xl font-bold sm:text-4xl">Will your solar project pay for itself?</h1>
         <p className="mt-2 max-w-xl text-white/90">
           Model costs, financing, production and energy prices to see when you break even.

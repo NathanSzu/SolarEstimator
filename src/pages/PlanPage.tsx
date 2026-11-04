@@ -26,8 +26,8 @@ export default function PlanPage() {
   return (
     <div className="space-y-4">
       <Link to="/" className="text-sm text-sun-600 hover:underline">← All plans</Link>
+      <h1 className="sr-only">Solar plan: {plan.name}</h1>
       <input
-        value={draft ?? plan.name}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
