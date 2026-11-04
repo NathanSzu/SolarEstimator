@@ -9,22 +9,7 @@ export interface GeoResult {
   country?: string
 }
 
-const owmKey = import.meta.env.VITE_OPENWEATHER_API_KEY as string | undefined
 const TTL_MS = 7 * 24 * 60 * 60 * 1000
-
-async function viaOpenWeather(q: string, signal?: AbortSignal): Promise<GeoResult[]> {
-  const data = await fetchJson<{ name: string; state?: string; country: string; lat: number; lon: number }[]>(
-    `https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(q)}&limit=5&appid=${owmKey}`,
-    { signal, retries: 1 },
-  )
-  return data.map((d) => ({
-    label: [d.name, d.state, d.country].filter(Boolean).join(', '),
-    lat: d.lat,
-    lon: d.lon,
-    region: d.state,
-    country: d.country,
-  }))
-}
 
 async function viaOpenMeteo(q: string, signal?: AbortSignal): Promise<GeoResult[]> {
   const data = await fetchJson<{
@@ -41,7 +26,7 @@ async function viaOpenMeteo(q: string, signal?: AbortSignal): Promise<GeoResult[
   }))
 }
 
-/** Uses OpenWeatherMap when a key is configured (falling back to keyless Open-Meteo if it fails). Results are cached. */
+/** Searches locations via keyless Open-Meteo geocoding. Results are cached. */
 export async function searchLocations(query: string, signal?: AbortSignal): Promise<GeoResult[]> {
   const q = query.trim()
   if (q.length < 3) return []
@@ -50,17 +35,7 @@ export async function searchLocations(query: string, signal?: AbortSignal): Prom
   const cached = cacheGet<GeoResult[]>(key, TTL_MS)
   if (cached) return cached
 
-  let results: GeoResult[]
-  if (owmKey) {
-    try {
-      results = await viaOpenWeather(q, signal)
-    } catch (e) {
-      if ((e as Error).name === 'AbortError') throw e
-      results = await viaOpenMeteo(q, signal)
-    }
-  } else {
-    results = await viaOpenMeteo(q, signal)
-  }
+  const results = await viaOpenMeteo(q, signal)
   if (results.length) cacheSet(key, results)
   return results
 }

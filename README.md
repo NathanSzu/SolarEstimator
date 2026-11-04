@@ -5,7 +5,7 @@ Estimate when a planned solar installation pays for itself. Enter a location, sy
 ## Data sources
 
 - **Production:** historical hourly irradiance from [Open-Meteo](https://open-meteo.com/) (keyless).
-- **Location search:** Open-Meteo geocoding, or [OpenWeatherMap](https://openweathermap.org/) if a key is set.
+- **Location search:** Open-Meteo geocoding (keyless).
 - **Local rate and price trend (US, optional):** [EIA](https://www.eia.gov/opendata/) residential prices, if a key is set. Otherwise you enter your own rate and escalation.
 
 ## Development
@@ -29,7 +29,7 @@ One-time setup:
 1. Create a Firebase project and enable Hosting.
 2. From the repo root run `firebase init hosting:github` (choose the existing `dist` public directory and SPA rewrite), or create a service account manually. This creates the `FIREBASE_SERVICE_ACCOUNT_<PROJECT>` GitHub secret used by `.github/workflows/deploy.yml`.
 3. In the GitHub repo settings add:
-   - Secrets `VITE_OPENWEATHER_API_KEY` and `VITE_EIA_API_KEY` (optional)
+   - Secret `VITE_EIA_API_KEY` (optional)
 
 Pushes to `main` deploy to the live channel; pull requests get a preview URL. Manual deploy: `npm run build && firebase deploy --only hosting`.
 

@@ -23,7 +23,6 @@ jobs:
       - run: npm test
       - run: npm run build
         env:
-          VITE_OPENWEATHER_API_KEY: ${{ secrets.VITE_OPENWEATHER_API_KEY }}
           VITE_EIA_API_KEY: ${{ secrets.VITE_EIA_API_KEY }}
       - name: Deploy live (main)
         if: github.event_name == 'push'
