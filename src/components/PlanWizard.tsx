@@ -437,9 +437,12 @@ function ReviewStep({ plan, update }: StepProps) {
           <Suspense fallback={<p className="text-sm text-slate-500">Loading charts…</p>}>
             <PaybackCharts result={result} startMonth={plan.assumptions.startMonth} />
           </Suspense>
+          <button type="button" onClick={() => window.print()} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100 print:hidden dark:border-slate-700 dark:hover:bg-slate-800">
+            Print / save as PDF
+          </button>
           <p className="text-xs text-slate-500">
             Based on {cache!.year} historical irradiance for this location (Open-Meteo), assuming all production offsets
-            purchased electricity at your rate.
+            purchased electricity at your rate. Projections are estimates, not guarantees or financial advice.
           </p>
         </>
       )}
@@ -460,7 +463,7 @@ export default function PlanWizard({ plan, update }: StepProps) {
 
   return (
     <div className="space-y-6">
-      <ol className="flex gap-2 overflow-x-auto" aria-label="Steps">
+      <ol className="flex gap-2 overflow-x-auto print:hidden" aria-label="Steps">
         {steps.map((s, i) => (
           <li key={s.title} className="flex-1">
             <button
@@ -478,7 +481,7 @@ export default function PlanWizard({ plan, update }: StepProps) {
       <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900/50">
         <Component plan={plan} update={update} />
       </div>
-      <div className="flex justify-between">
+      <div className="flex justify-between print:hidden">
         <button onClick={() => setStep((s) => s - 1)} disabled={step === 0} className="rounded-lg border border-slate-300 px-4 py-2 disabled:opacity-40 dark:border-slate-700">
           Back
         </button>
