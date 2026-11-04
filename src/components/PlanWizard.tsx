@@ -1,11 +1,16 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { HORIZON_YEARS, monthlyProduction, project } from '../lib/finance'
+import { HORIZON_YEARS } from '../lib/finance'
+import { formatPayback, money, money2 } from '../lib/format'
 import { searchLocations, type GeoResult } from '../lib/geocode'
 import { loanSummary } from '../lib/loan'
+import { projectPlan } from '../lib/projectPlan'
+import { fetchRateTrend, fetchResidentialRate, rateLookupAvailable, stateCode } from '../lib/rates'
+import { DEFAULT_SCENARIO, applyScenario, isDefaultScenario, type Scenario } from '../lib/scenario'
 import { fetchIrradiance, irradianceMatches } from '../lib/solar'
 import type { Plan } from '../types/plan'
 import { Field, NumberField, inputClass } from './fields'
+import ScenarioPanel from './ScenarioPanel'
 
 const PaybackCharts = lazy(() => import('./PaybackCharts'))
 
@@ -16,9 +21,6 @@ interface StepProps {
 }
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
-
-const money = (n: number) => n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
-const money2 = (n: number) => n.toLocaleString(undefined, { style: 'currency', currency: 'USD' })
 
 function LocationStep({ plan, update }: StepProps) {
   const [query, setQuery] = useState(plan.location.label)
@@ -39,7 +41,7 @@ function LocationStep({ plan, update }: StepProps) {
       try {
         setResults(await searchLocations(query, ctrl.signal))
       } catch (e) {
-        if ((e as Error).name !== 'AbortError') setError('Location search is unavailable. Try again shortly.')
+        if ((e as Error).name !== 'AbortError') setError(`${(e as Error).message} You can still type a different search.`)
       } finally {
         setLoading(false)
       }
@@ -51,7 +53,7 @@ function LocationStep({ plan, update }: StepProps) {
   }, [query, label])
 
   const pick = (r: GeoResult) => {
-    update({ location: { label: r.label, lat: r.lat, lon: r.lon } })
+    update({ location: { label: r.label, lat: r.lat, lon: r.lon, region: r.region, country: r.country } })
     setQuery(r.label)
     setResults([])
   }
@@ -97,6 +99,153 @@ function LocationStep({ plan, update }: StepProps) {
   )
 }
 
+function usState(plan: Plan): string | null {
+  const c = plan.location.country
+  return c?.toUpperCase().startsWith('US') || c === 'United States' ? stateCode(plan.location.region) : null
+}
+
+const toggleTab = (active: boolean) =>
+  `rounded-md px-2 py-1 ${active ? 'bg-sun-500 text-white' : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'}`
+
+const TREND_YEARS = [5, 10, 20]
+
+function EscalationLookup({ plan, update }: StepProps) {
+  const [status, setStatus] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [years, setYears] = useState(10)
+  if (!rateLookupAvailable) return null
+  const state = usState(plan)
+  const a = plan.assumptions
+  const local = a.localEscalation
+  const usingLocal = a.escalationSource === 'local' && !!local
+
+  const lookup = async () => {
+    if (!state) return
+    setBusy(true)
+    setStatus('')
+    try {
+      const t = await fetchRateTrend(state, years)
+      update({
+        assumptions: {
+          ...a,
+          manualEscalation: a.escalationSource === 'local' ? a.manualEscalation : a.rateEscalationPct,
+          localEscalation: { pct: t.pct, state, fromYear: t.fromYear, toYear: t.toYear },
+          escalationSource: 'local',
+          rateEscalationPct: t.pct,
+        },
+      })
+    } catch (e) {
+      setStatus((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const switchTo = (source: 'manual' | 'local') => {
+    if (source === 'local' && local) {
+      update({ assumptions: { ...a, escalationSource: 'local', manualEscalation: a.manualEscalation ?? a.rateEscalationPct, rateEscalationPct: local.pct } })
+    } else if (source === 'manual') {
+      update({ assumptions: { ...a, escalationSource: 'manual', rateEscalationPct: a.manualEscalation ?? a.rateEscalationPct } })
+    }
+  }
+
+  return (
+    <div className="text-xs">
+      {local && (
+        <div className="flex flex-wrap items-center gap-1">
+          <button type="button" onClick={() => switchTo('manual')} aria-pressed={!usingLocal} className={toggleTab(!usingLocal)}>
+            My value{a.manualEscalation != null ? ` (${a.manualEscalation}%)` : ''}
+          </button>
+          <button type="button" onClick={() => switchTo('local')} aria-pressed={usingLocal} className={toggleTab(usingLocal)}>
+            {local.state} trend {local.fromYear}–{local.toYear} ({local.pct}%)
+          </button>
+        </div>
+      )}
+      <div className="mt-1 flex flex-wrap items-center gap-2">
+        <label className="text-slate-500" htmlFor="trend-years">Look back</label>
+        <select id="trend-years" value={years} onChange={(e) => setYears(Number(e.target.value))} className="rounded border border-slate-300 bg-transparent px-1 py-0.5 dark:border-slate-700">
+          {TREND_YEARS.map((y) => (
+            <option key={y} value={y}>{y} years</option>
+          ))}
+        </select>
+        <button type="button" onClick={lookup} disabled={!state || busy} className="text-sun-600 hover:underline disabled:opacity-50 disabled:no-underline">
+          {busy ? 'Looking up…' : local ? 'Refresh trend' : 'Use historical local trend (US)'}
+        </button>
+        {!state && !local && <span className="text-slate-500">Choose a US location first.</span>}
+      </div>
+      {usingLocal && local && (
+        <p className="mt-1 text-slate-500">
+          Average yearly growth of EIA residential prices; past trends may not continue. Editing the field switches back to your own value.
+        </p>
+      )}
+      {status && <p role="status" className="mt-1 text-slate-500">{status}</p>}
+    </div>
+  )
+}
+
+function RateLookup({ plan, update }: StepProps) {
+  const [status, setStatus] = useState('')
+  const [busy, setBusy] = useState(false)
+  if (!rateLookupAvailable) return null
+  const state = usState(plan)
+
+  const lookup = async () => {
+    if (!state) return
+    setBusy(true)
+    setStatus('')
+    try {
+      const r = await fetchResidentialRate(state)
+      const a = plan.assumptions
+      update({
+        assumptions: {
+          ...a,
+          manualRate: a.rateSource === 'local' ? a.manualRate : a.electricityRate,
+          localRate: { rate: r.rate, state, months: r.months },
+          rateSource: 'local',
+          electricityRate: r.rate,
+        },
+      })
+    } catch (e) {
+      setStatus((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const a = plan.assumptions
+  const local = a.localRate
+  const usingLocal = a.rateSource === 'local' && !!local
+  const switchTo = (source: 'manual' | 'local') => {
+    if (source === 'local' && local) {
+      update({ assumptions: { ...a, rateSource: 'local', manualRate: a.manualRate ?? a.electricityRate, electricityRate: local.rate } })
+    } else if (source === 'manual') {
+      update({ assumptions: { ...a, rateSource: 'manual', electricityRate: a.manualRate ?? a.electricityRate } })
+    }
+  }
+  const tab = toggleTab
+
+  return (
+    <div className="text-xs">
+      {local && (
+        <div className="flex flex-wrap items-center gap-1">
+          <button type="button" onClick={() => switchTo('manual')} aria-pressed={!usingLocal} className={tab(!usingLocal)}>
+            My rate{a.manualRate != null ? ` ($${a.manualRate})` : ''}
+          </button>
+          <button type="button" onClick={() => switchTo('local')} aria-pressed={usingLocal} className={tab(usingLocal)}>
+            {local.state} average (${local.rate})
+          </button>
+        </div>
+      )}
+      <button type="button" onClick={lookup} disabled={!state || busy} className="mt-1 text-sun-600 hover:underline disabled:opacity-50 disabled:no-underline">
+        {busy ? 'Looking up…' : local ? 'Refresh local rate' : 'Use average local rate (US)'}
+      </button>
+      {!state && !local && <span className="ml-2 text-slate-500">Choose a US location first.</span>}
+      {usingLocal && local && <p className="mt-1 text-slate-500">EIA average residential rate, last {local.months} months. Editing the field switches back to your own rate.</p>}
+      {status && <p role="status" className="mt-1 text-slate-500">{status}</p>}
+    </div>
+  )
+}
+
 function SystemStep({ plan, update }: StepProps) {
   const s = plan.system
   const set = (k: keyof Plan['system']) => (v: number) => update({ system: { ...s, [k]: v } })
@@ -118,26 +267,32 @@ function SystemStep({ plan, update }: StepProps) {
           ))}
         </select>
       </Field>
-      <NumberField
-        label="Electricity rate"
-        value={plan.assumptions.electricityRate}
-        onChange={(v) => update({ assumptions: { ...plan.assumptions, electricityRate: v } })}
-        min={0}
-        max={2}
-        step={0.01}
-        prefix="$"
-        suffix="/kWh"
-        hint="Check your utility bill for your current rate."
-      />
-      <NumberField
-        label="Energy price escalation"
-        value={plan.assumptions.rateEscalationPct}
-        onChange={(v) => update({ assumptions: { ...plan.assumptions, rateEscalationPct: v } })}
-        min={-5}
-        max={15}
-        step={0.1}
-        suffix="%/yr"
-      />
+      <div className="space-y-2">
+        <NumberField
+          label="Electricity rate"
+          value={plan.assumptions.electricityRate}
+          onChange={(v) => update({ assumptions: { ...plan.assumptions, electricityRate: v, manualRate: v, rateSource: 'manual' } })}
+          min={0}
+          max={2}
+          step={0.01}
+          prefix="$"
+          suffix="/kWh"
+          hint="Check your utility bill for your current rate."
+        />
+        <RateLookup plan={plan} update={update} />
+      </div>
+      <div className="space-y-2">
+        <NumberField
+          label="Energy price escalation"
+          value={plan.assumptions.rateEscalationPct}
+          onChange={(v) => update({ assumptions: { ...plan.assumptions, rateEscalationPct: v, manualEscalation: v, escalationSource: 'manual' } })}
+          min={-5}
+          max={15}
+          step={0.1}
+          suffix="%/yr"
+        />
+        <EscalationLookup plan={plan} update={update} />
+      </div>
     </div>
   )
 }
@@ -214,6 +369,7 @@ function ReviewStep({ plan, update }: StepProps) {
   const fresh = hasLoc && irradianceMatches(cache, l.lat!, l.lon!, s.tiltDeg, s.azimuthDeg)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     if (!hasLoc || fresh) return
@@ -226,12 +382,19 @@ function ReviewStep({ plan, update }: StepProps) {
       .finally(() => setLoading(false))
     return () => ctrl.abort()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasLoc, fresh, l.lat, l.lon, s.tiltDeg, s.azimuthDeg])
+  }, [hasLoc, fresh, l.lat, l.lon, s.tiltDeg, s.azimuthDeg, attempt])
 
-  const result = useMemo(() => {
-    if (!fresh || !cache) return null
-    return project(plan, monthlyProduction(cache.monthlyKwhPerM2, s.sizeKw, s.lossesPct))
-  }, [fresh, cache, plan, s.sizeKw, s.lossesPct])
+  const [scenario, setScenario] = useState<Scenario>(DEFAULT_SCENARIO)
+  const scenarioActive = !isDefaultScenario(scenario)
+
+  const { result, cash, loanResult } = useMemo(() => {
+    const what = applyScenario(plan, scenario)
+    return {
+      result: projectPlan(what),
+      cash: projectPlan(applyScenario(plan, { ...scenario, financing: 'cash' })),
+      loanResult: projectPlan(applyScenario(plan, { ...scenario, financing: 'loan' })),
+    }
+  }, [plan, scenario])
 
   const rows: [string, string][] = [
     ['Location', l.label || 'Not set'],
@@ -254,37 +417,34 @@ function ReviewStep({ plan, update }: StepProps) {
       </dl>
       {l.lat === null && <p className="text-sm text-amber-700 dark:text-amber-400">Add a location to calculate production and payback.</p>}
       {loading && <p className="text-sm text-slate-500">Loading historical solar data…</p>}
-      {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+      {error && (
+        <p role="alert" className="text-sm text-red-600">
+          {error}{' '}
+          <button onClick={() => setAttempt((a) => a + 1)} className="font-medium underline">Retry</button>
+        </p>
+      )}
       {result && (
-        <div className="grid gap-3 rounded-xl bg-amber-50 p-4 sm:grid-cols-2 lg:grid-cols-4 dark:bg-slate-900">
+        <>
+          {scenarioActive && <p className="text-sm font-medium text-sun-600">Showing a what-if scenario (not saved).</p>}
+          <div className="grid gap-3 rounded-xl bg-amber-50 p-4 sm:grid-cols-2 lg:grid-cols-4 dark:bg-slate-900">
           <Stat label="Payback" value={formatPayback(result.paybackMonth)} hint="The month your cumulative cash position reaches zero and stays there, counting the down payment, loan payments and ongoing costs." />
           <Stat label={`${HORIZON_YEARS}-year net profit`} value={money(result.netAtHorizon)} hint="Total savings minus all costs paid (down payment, loan principal and interest, maintenance, inverter replacement). Not adjusted for inflation or the time value of money." />
           <Stat label="Year-one production" value={`${Math.round(result.firstYearKwh).toLocaleString()} kWh`} />
           <Stat label="Up-front cost" value={money(result.upfront)} />
           <Stat label="First-month cash flow" value={money2(result.rows[0].net)} hint="Savings minus the loan payment and upkeep in month one only. It can be negative even when the plan eventually pays back, because savings grow over time and the loan payment ends." />
-        </div>
-      )}
-      {result && cache && (
-        <>
+          </div>
+          <ScenarioPanel scenario={scenario} onChange={setScenario} cash={cash} loan={loanResult} />
           <Suspense fallback={<p className="text-sm text-slate-500">Loading charts…</p>}>
             <PaybackCharts result={result} startMonth={plan.assumptions.startMonth} />
           </Suspense>
           <p className="text-xs text-slate-500">
-            Based on {cache.year} historical irradiance for this location (Open-Meteo), assuming all production offsets
+            Based on {cache!.year} historical irradiance for this location (Open-Meteo), assuming all production offsets
             purchased electricity at your rate.
           </p>
         </>
       )}
     </div>
   )
-}
-
-function formatPayback(month: number | null) {
-  if (month === null) return `Not within ${HORIZON_YEARS} years`
-  if (month === 0) return 'No up-front cost'
-  const y = Math.floor(month / 12)
-  const m = month % 12
-  return [y && `${y} yr`, m && `${m} mo`].filter(Boolean).join(' ')
 }
 
 const steps = [

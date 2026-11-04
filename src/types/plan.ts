@@ -5,7 +5,7 @@ export interface Plan {
   name: string
   createdAt: string
   updatedAt: string
-  location: { label: string; lat: number | null; lon: number | null }
+  location: { label: string; lat: number | null; lon: number | null; region?: string; country?: string }
   system: { sizeKw: number; tiltDeg: number; azimuthDeg: number; lossesPct: number; degradationPct: number }
   costs: {
     installCost: number
@@ -15,7 +15,18 @@ export interface Plan {
     inverterReplacementYear: number
   }
   loan: { enabled: boolean; principal: number; aprPct: number; termMonths: number }
-  assumptions: { rateEscalationPct: number; electricityRate: number; startMonth: number }
+  assumptions: {
+    rateEscalationPct: number
+    electricityRate: number
+    startMonth: number
+    /** Which value electricityRate currently holds; both are remembered so users can switch freely. */
+    rateSource?: 'manual' | 'local'
+    manualRate?: number
+    localRate?: { rate: number; state: string; months: number }
+    escalationSource?: 'manual' | 'local'
+    manualEscalation?: number
+    localEscalation?: { pct: number; state: string; fromYear: number; toYear: number }
+  }
   /** Cached historical irradiance (kWh/m² per month) for the location and orientation it was fetched for. */
   irradiance?: IrradianceCache
 }
@@ -86,6 +97,8 @@ export function sanitizePlan(raw: unknown, keepIdentity = false): Plan | null {
       label: typeof loc.label === 'string' ? loc.label : '',
       lat: typeof loc.lat === 'number' ? loc.lat : null,
       lon: typeof loc.lon === 'number' ? loc.lon : null,
+      region: typeof loc.region === 'string' ? loc.region : undefined,
+      country: typeof loc.country === 'string' ? loc.country : undefined,
     },
     system: {
       sizeKw: num(sys.sizeKw, d.system.sizeKw),
@@ -112,6 +125,25 @@ export function sanitizePlan(raw: unknown, keepIdentity = false): Plan | null {
       electricityRate: num(asm.electricityRate, d.assumptions.electricityRate),
       // Plans saved before this setting existed started in January.
       startMonth: Math.min(12, Math.max(1, Math.round(num(asm.startMonth, 1)))),
+      rateSource: asm.rateSource === 'local' && isObj(asm.localRate) ? 'local' : 'manual',
+      manualRate: typeof asm.manualRate === 'number' ? asm.manualRate : undefined,
+      localRate:
+        isObj(asm.localRate) && typeof asm.localRate.rate === 'number' && typeof asm.localRate.state === 'string'
+          ? { rate: asm.localRate.rate, state: asm.localRate.state, months: num(asm.localRate.months, 12) }
+          : undefined,
+      escalationSource: asm.escalationSource === 'local' && isObj(asm.localEscalation) ? 'local' : 'manual',
+      manualEscalation: typeof asm.manualEscalation === 'number' ? asm.manualEscalation : undefined,
+      localEscalation:
+        isObj(asm.localEscalation) &&
+        [asm.localEscalation.pct, asm.localEscalation.fromYear, asm.localEscalation.toYear].every((n) => typeof n === 'number') &&
+        typeof asm.localEscalation.state === 'string'
+          ? {
+              pct: asm.localEscalation.pct as number,
+              state: asm.localEscalation.state,
+              fromYear: asm.localEscalation.fromYear as number,
+              toYear: asm.localEscalation.toYear as number,
+            }
+          : undefined,
     },
     irradiance: sanitizeIrradiance(raw.irradiance),
   }

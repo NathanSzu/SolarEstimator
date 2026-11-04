@@ -1,4 +1,8 @@
 import type { IrradianceCache } from '../types/plan'
+import { cacheGet, cacheSet } from './cache'
+import { fetchJson } from './http'
+
+const TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 /** Open-Meteo uses 0° = south, so convert from compass azimuth (180° = south). */
 const toOpenMeteoAzimuth = (compass: number) => ((compass - 180 + 540) % 360) - 180
@@ -7,7 +11,11 @@ export function irradianceMatches(c: IrradianceCache | undefined, lat: number, l
   return !!c && c.lat === lat && c.lon === lon && c.tiltDeg === tilt && c.azimuthDeg === az
 }
 
-/** Fetches last calendar year's hourly plane-of-array irradiance and sums it by month (kWh/m²). */
+/**
+ * Loads last calendar year's plane-of-array irradiance by month (kWh/m²).
+ * Results are shared across plans via a 30-day cache keyed to ~1 km, and an older cached
+ * result is used if the service is unavailable.
+ */
 export async function fetchIrradiance(
   lat: number,
   lon: number,
@@ -16,6 +24,12 @@ export async function fetchIrradiance(
   signal?: AbortSignal,
 ): Promise<IrradianceCache> {
   const year = new Date().getFullYear() - 1
+  const key = `irr:${lat.toFixed(2)}:${lon.toFixed(2)}:${tiltDeg}:${azimuthDeg}:${year}`
+  const withExact = (c: IrradianceCache): IrradianceCache => ({ ...c, lat, lon, tiltDeg, azimuthDeg })
+
+  const fresh = cacheGet<IrradianceCache>(key, TTL_MS)
+  if (fresh) return withExact(fresh)
+
   const params = new URLSearchParams({
     latitude: String(lat),
     longitude: String(lon),
@@ -26,14 +40,25 @@ export async function fetchIrradiance(
     azimuth: String(toOpenMeteoAzimuth(azimuthDeg)),
     timezone: 'auto',
   })
-  const res = await fetch(`https://archive-api.open-meteo.com/v1/archive?${params}`, { signal })
-  if (!res.ok) throw new Error('Could not load historical solar data')
-  const data: { hourly?: { time: string[]; global_tilted_irradiance: (number | null)[] } } = await res.json()
-  if (!data.hourly) throw new Error('No solar data returned for this location')
 
-  const months = new Array<number>(12).fill(0)
-  data.hourly.time.forEach((t, i) => {
-    months[parseInt(t.slice(5, 7), 10) - 1] += (data.hourly!.global_tilted_irradiance[i] ?? 0) / 1000
-  })
-  return { lat, lon, tiltDeg, azimuthDeg, year, monthlyKwhPerM2: months, fetchedAt: new Date().toISOString() }
+  try {
+    const data = await fetchJson<{ hourly?: { time: string[]; global_tilted_irradiance: (number | null)[] } }>(
+      `https://archive-api.open-meteo.com/v1/archive?${params}`,
+      { signal },
+    )
+    if (!data.hourly) throw new Error('No solar data returned for this location')
+
+    const months = new Array<number>(12).fill(0)
+    data.hourly.time.forEach((t, i) => {
+      months[parseInt(t.slice(5, 7), 10) - 1] += (data.hourly!.global_tilted_irradiance[i] ?? 0) / 1000
+    })
+    const result: IrradianceCache = { lat, lon, tiltDeg, azimuthDeg, year, monthlyKwhPerM2: months, fetchedAt: new Date().toISOString() }
+    cacheSet(key, result)
+    return result
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') throw e
+    const stale = cacheGet<IrradianceCache>(key, Infinity)
+    if (stale) return withExact(stale)
+    throw e
+  }
 }

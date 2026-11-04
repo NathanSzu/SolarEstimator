@@ -46,6 +46,9 @@ export default function Home() {
           <h2 className="text-xl font-semibold">Your plans</h2>
           <div className="flex items-center gap-4">
             <span className="text-sm text-slate-500">{plans.length}/{MAX_PLANS} saved</span>
+            {plans.length >= 2 && (
+              <Link to="/compare" className={`${btn} text-sun-600`}>Compare</Link>
+            )}
             <button onClick={() => fileRef.current?.click()} className={`${btn} text-sun-600`}>Import</button>
             {plans.length > 0 && (
               <button onClick={() => downloadJson(plans, 'solar-plans.json')} className={`${btn} text-sun-600`}>Export all</button>
